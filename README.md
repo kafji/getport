@@ -1,6 +1,6 @@
-# getrandomport
+# Getrandomport
 
-Get a random not-in-use port.
+Get a random available port for TCP or UDP socket.
 
 ```rust
 let port = reserve_udp_port();
