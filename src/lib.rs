@@ -1,218 +1,198 @@
+#![deny(missing_debug_implementations)]
+
 use std::{
     io::ErrorKind,
     net::{SocketAddr, TcpListener, UdpSocket},
 };
+use thiserror::Error;
 
-/// Port reservation.
-pub struct Port<T> {
+#[derive(Debug)]
+pub struct ReservedPort<T> {
     number: u16,
-    _sitter: T,
+    _res: T,
 }
 
-impl<T> Port<T> {
-    /// Take the port number & release its sitter.
+impl<T> ReservedPort<T> {
+    /// Takes the port number and release its reservation.
+    #[inline]
     pub fn take(self) -> u16 {
         self.number
     }
 
-    /// Returns the port number without releasing its sitter.
+    /// Returns the port number without releasing its reservation.
+    #[inline]
     pub fn peek(&self) -> u16 {
         self.number
     }
 }
 
-impl<T> AsRef<u16> for Port<T> {
+impl<T> AsRef<u16> for ReservedPort<T> {
     fn as_ref(&self) -> &u16 {
         &self.number
     }
 }
 
-trait Sit {
-    type Socket;
-    fn sit(port: u16) -> Option<Port<Self::Socket>>;
+pub trait Reservable: private::Sealed {
+    type Res;
+    fn reserve(port: u16) -> Option<ReservedPort<Self::Res>>;
 }
 
-impl Sit for UdpSocket {
-    type Socket = UdpSocket;
+impl Reservable for UdpSocket {
+    type Res = UdpSocket;
 
-    fn sit(port: u16) -> Option<Port<Self::Socket>> {
+    fn reserve(port: u16) -> Option<ReservedPort<Self::Res>> {
         let addr: SocketAddr = ([127, 0, 0, 1], port).into();
-        let r = UdpSocket::bind(addr);
-        match r {
-            Ok(sitter) => Port { number: port, _sitter: sitter }.into(),
+        match UdpSocket::bind(addr) {
+            Ok(res) => ReservedPort {
+                number: res.local_addr().unwrap().port(),
+                _res: res,
+            }
+            .into(),
             Err(x) if x.kind() == ErrorKind::AddrInUse => None,
             Err(x) => panic!("{}", x),
         }
     }
 }
 
-impl Sit for TcpListener {
-    type Socket = TcpListener;
+impl Reservable for TcpListener {
+    type Res = TcpListener;
 
-    fn sit(port: u16) -> Option<Port<Self::Socket>> {
+    fn reserve(port: u16) -> Option<ReservedPort<Self::Res>> {
         let addr: SocketAddr = ([127, 0, 0, 1], port).into();
-        let r = TcpListener::bind(addr);
-        match r {
-            Ok(sitter) => Port { number: port, _sitter: sitter }.into(),
+        match TcpListener::bind(addr) {
+            Ok(res) => ReservedPort {
+                number: res.local_addr().unwrap().port(),
+                _res: res,
+            }
+            .into(),
             Err(x) if x.kind() == ErrorKind::AddrInUse => None,
             Err(x) => panic!("{}", x),
         }
     }
 }
 
-/// Returns a usable private ports (49152-65535) for UDP.
-///
-/// Example:
-///
-/// ```rust
-/// let port = getrandomport::reserve_udp_port().take();
-/// ```
-pub fn reserve_udp_port() -> Port<UdpSocket> {
-    reserve_port::<UdpSocket, _>(&mut Fastrand)
+/// Reserves random UDP port from OS.
+#[inline]
+pub fn reserve_udp_port() -> ReservedPort<UdpSocket> {
+    reserve_port::<UdpSocket, _>(Singleton(0)).unwrap()
 }
 
-/// Returns a usable private ports (49152-65535) for TCP.
-///
-/// Example:
-///
-/// ```rust
-/// let port = getrandomport::reserve_tcp_port().take();
-/// ```
-pub fn reserve_tcp_port() -> Port<TcpListener> {
-    reserve_port::<TcpListener, _>(&mut Fastrand)
+/// Reserves random TCP port from OS.
+#[inline]
+pub fn reserve_tcp_port() -> ReservedPort<TcpListener> {
+    reserve_port::<TcpListener, _>(Singleton(0)).unwrap()
 }
 
-fn reserve_port<T, P>(ports: &mut P) -> Port<T::Socket>
+pub fn reserve_port<T, P>(mut ports: P) -> Result<ReservedPort<T::Res>, Error>
 where
-    T: Sit,
-    P: ProvidePort,
+    T: Reservable,
+    P: ProvidePorts,
 {
+    let ports_count = ports.length();
     let mut attempts = 0;
-    loop {
-        if attempts >= 5 {
-            panic!("Failed to find usable port after 5 attempts.")
+    let port = loop {
+        if attempts >= ports_count {
+            return Err(Error::Exhausted(attempts));
         }
-        attempts += 1;
-        let port = ports.provide_port();
-        match T::sit(port) {
-            Some(x) => return x,
+        let port = ports.get_port();
+        match T::reserve(port) {
+            Some(x) => break x,
             None => (),
         }
+        attempts += 1;
+    };
+    Ok(port)
+}
+
+pub trait ProvidePorts {
+    fn get_port(&mut self) -> u16;
+    fn length(&self) -> usize;
+}
+
+struct Singleton(u16);
+
+impl ProvidePorts for Singleton {
+    fn get_port(&mut self) -> u16 {
+        self.0
+    }
+
+    fn length(&self) -> usize {
+        1
     }
 }
 
-trait ProvidePort {
-    /// Returns number from 49152 to 65535.
-    fn provide_port(&mut self) -> u16;
+impl<T> ProvidePorts for T
+where
+    T: ExactSizeIterator<Item = u16>,
+{
+    fn get_port(&mut self) -> u16 {
+        self.next().unwrap()
+    }
+
+    fn length(&self) -> usize {
+        self.len()
+    }
 }
 
-/// [Fastrand] backed random port number generator.
-///
-/// [Fastrand]: https://docs.rs/fastrand/latest/fastrand/
-struct Fastrand;
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("failed to find usable port after {0} attempts")]
+    Exhausted(usize),
+}
 
-impl ProvidePort for Fastrand {
-    fn provide_port(&mut self) -> u16 {
-        fastrand::u16(49152..=65535)
-    }
+mod private {
+    use super::*;
+
+    pub trait Sealed {}
+    impl Sealed for UdpSocket {}
+    impl Sealed for TcpListener {}
 }
 
 #[cfg(test)]
-mod retry_tests {
+mod tests {
     use super::*;
-
-    struct Provider {
-        ports: [u16; 2],
-        index: usize,
-    }
-
-    impl Provider {
-        fn new(ports: [u16; 2]) -> Self {
-            let index = 0;
-            Self { ports, index }
-        }
-    }
-
-    impl ProvidePort for Provider {
-        fn provide_port(&mut self) -> u16 {
-            let port = self.ports[self.index];
-            self.index += 1;
-            port
-        }
-    }
 
     #[test]
     fn test_retry_for_udp() {
         let port_1 = reserve_udp_port();
-
         let port_2 = reserve_udp_port().take();
 
-        let port = reserve_port::<UdpSocket, _>(&mut Provider::new([port_1.peek(), port_2]));
+        let port = reserve_port::<UdpSocket, _>([port_1.peek(), port_2].into_iter()).unwrap();
+
         assert_eq!(port.peek(), port_2)
     }
 
     #[test]
     fn test_retry_for_tcp() {
         let port_1 = reserve_tcp_port();
-
         let port_2 = reserve_tcp_port().take();
 
-        let port = reserve_port::<TcpListener, _>(&mut Provider::new([port_1.peek(), port_2]));
+        let port = reserve_port::<TcpListener, _>([port_1.peek(), port_2].into_iter()).unwrap();
+
         assert_eq!(port.peek(), port_2)
-    }
-}
-
-#[cfg(test)]
-mod max_retries_tests {
-    use super::*;
-    use std::panic::catch_unwind;
-
-    #[derive(Debug)]
-    struct Provider {
-        port: u16,
-        attempts: u8,
-    }
-
-    impl Provider {
-        fn new(port: u16) -> Self {
-            let attempts = 0;
-            Self { port, attempts }
-        }
-    }
-
-    impl ProvidePort for Provider {
-        fn provide_port(&mut self) -> u16 {
-            self.attempts += 1;
-            if self.attempts > 5 {
-                panic!("Expecting attempts to be less than or equal to 5.")
-            }
-            self.port
-        }
     }
 
     #[test]
     fn test_maximum_retries_for_udp() {
         let port = reserve_udp_port();
 
-        let err = catch_unwind(|| {
-            reserve_port::<UdpSocket, _>(&mut Provider::new(port.peek()));
-        })
-        .unwrap_err();
+        let error = reserve_port::<UdpSocket, _>(Singleton(port.peek())).unwrap_err();
 
-        let err = err.downcast_ref::<&str>();
-        assert!(matches!(err, Some(&x) if x == "Failed to find usable port after 5 attempts."));
+        assert_eq!(
+            error.to_string(),
+            "failed to find usable port after 1 attempts"
+        );
     }
 
     #[test]
     fn test_maximum_retries_for_tcp() {
         let port = reserve_tcp_port();
 
-        let err = catch_unwind(|| {
-            reserve_port::<TcpListener, _>(&mut Provider::new(port.peek()));
-        })
-        .unwrap_err();
+        let error = reserve_port::<TcpListener, _>(Singleton(port.peek())).unwrap_err();
 
-        let err = err.downcast_ref::<&str>();
-        assert!(matches!(err, Some(&x) if x == "Failed to find usable port after 5 attempts."));
+        assert_eq!(
+            error.to_string(),
+            "failed to find usable port after 1 attempts"
+        );
     }
 }

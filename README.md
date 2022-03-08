@@ -1,6 +1,6 @@
-# Getrandomport
+# Getport
 
-Get a random available port for TCP or UDP socket.
+Port reservation helper.
 
 ```rust
 let port = reserve_udp_port();
@@ -13,5 +13,5 @@ TcpListener::bind(format!("127.0.0.1:{}", port.take())).unwrap();
 ## Install
 
 ```toml
-getrandomport = { git = "https://github.com/kafji/getrandomport", tag = "v0.1.0" }
+getport = { git = "https://github.com/kafji/getport", tag = "v0.2.0" }
 ```
