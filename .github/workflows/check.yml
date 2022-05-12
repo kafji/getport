@@ -1,6 +1,6 @@
 # https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions
 
-name: Build
+name: Check
 
 on:
   push:
@@ -27,7 +27,7 @@ jobs:
             ~/.cargo/git/db/
           key: cargo-${{ runner.os }}-${{ hashFiles('./Cargo.toml', './Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-
+            cargo-${{ runner.os }}
 
       - name: Test
         run: cargo test
