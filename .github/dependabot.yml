@@ -7,12 +7,12 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
-    reviewers: |
-      "kafji"
+    reviewers:
+      - "kafji"
 
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "daily"
-    reviewers: |
-      "kafji"
+    reviewers:
+      - "kafji"
