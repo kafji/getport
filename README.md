@@ -13,5 +13,5 @@ TcpListener::bind(format!("127.0.0.1:{}", port.take())).unwrap();
 ## Install
 
 ```toml
-getport = { git = "https://github.com/kafji/getport", tag = "v0.2.0" }
+getport = { git = "https://github.com/kafji/getport", tag = "v0.3.0" }
 ```
